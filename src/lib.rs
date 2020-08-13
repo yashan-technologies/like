@@ -44,6 +44,29 @@ pub trait Like {
     }
 }
 
+/// SQL `ilike` style pattern matching.
+///
+/// `ilike` is a case-insensitive version of `like` style pattern matching;
+/// make the input and pattern to be lowercase and do comparison.
+/// Other internal implementation are the same as `like`.
+pub trait ILike {
+    /// The associated error which can be returned from pattern matching.
+    type Err;
+
+    /// Check if `self` match a pattern.
+    ///
+    /// Returns `true` if `self` matches the supplied `pattern`.
+    fn ilike(&self, pattern: &Self) -> Result<bool, Self::Err>;
+
+    /// Check if `self`  match a pattern.
+    ///
+    /// Returns `true` if `self` doesn't match the supplied `pattern`.
+    #[inline]
+    fn not_ilike(&self, pattern: &Self) -> Result<bool, Self::Err> {
+        self.ilike(pattern).map(|m| !m)
+    }
+}
+
 trait Traverser {
     fn len(&self) -> usize;
     fn next_char(&mut self);
@@ -77,7 +100,7 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
             // Next pattern byte must match literally, whatever it is
             pattern.next_byte();
             // ... and there had better be one, per SQL standard
-            if pattern.len() <= 0 {
+            if pattern.len() == 0 {
                 return Err(InvalidPatternError);
             }
 
@@ -104,7 +127,7 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
                     pattern.next_byte();
                 } else if pattern_raw_char == b'_' {
                     // If not enough text left to match the pattern, ABORT
-                    if input.len() <= 0 {
+                    if input.len() == 0 {
                         return Ok(Matched::Abort);
                     }
                     input.next_char();
@@ -116,7 +139,7 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
 
             // If we're at end of pattern, match: we have a trailing % which
             // matches any remaining text string.
-            if pattern.len() <= 0 {
+            if pattern.len() == 0 {
                 return Ok(Matched::True);
             }
 
@@ -183,13 +206,13 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
     while pattern.len() > 0 && pattern.raw_char() == b'%' {
         pattern.next_byte();
     }
-    if pattern.len() <= 0 {
+    if pattern.len() == 0 {
         return Ok(Matched::True);
     }
 
     // End of text with no match, so no point in trying later places to start
     // matching this pattern.
-    return Ok(Matched::Abort);
+    Ok(Matched::Abort)
 }
 
 /// Errors which can occur when attempting to match a pattern.
@@ -227,7 +250,7 @@ impl<'a> Traverser for StrTraverser<'a> {
     #[inline]
     fn next_char(&mut self) {
         self.next_byte();
-        while self.bytes.len() > 0 && (self.raw_char() & 0xC0) == 0x80 {
+        while !self.bytes.is_empty() && (self.raw_char() & 0xC0) == 0x80 {
             self.next_byte();
         }
     }
@@ -296,6 +319,97 @@ impl<'a> Traverser for BytesTraverser<'a> {
     }
 }
 
+struct ICStrTraverser<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> ICStrTraverser<'a> {
+    #[inline]
+    const fn new(s: &'a str) -> Self {
+        Self {
+            bytes: s.as_bytes(),
+        }
+    }
+}
+
+impl<'a> Traverser for ICStrTraverser<'a> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    #[inline]
+    fn next_char(&mut self) {
+        self.next_byte();
+        while !self.bytes.is_empty() && (self.raw_char() & 0xC0) == 0x80 {
+            self.next_byte();
+        }
+    }
+
+    #[inline]
+    fn next_byte(&mut self) {
+        self.bytes = &self.bytes[1..];
+    }
+
+    #[inline]
+    fn raw_char(&self) -> u8 {
+        self.bytes[0]
+    }
+
+    #[inline]
+    fn char(&self) -> u8 {
+        self.char_at(0)
+    }
+
+    #[inline]
+    fn char_at(&self, index: usize) -> u8 {
+        self.bytes[index].to_ascii_lowercase()
+    }
+}
+
+struct ICBytesTraverser<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> ICBytesTraverser<'a> {
+    #[inline]
+    const fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+}
+
+impl<'a> Traverser for ICBytesTraverser<'a> {
+    #[inline]
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    #[inline]
+    fn next_char(&mut self) {
+        self.next_byte()
+    }
+
+    #[inline]
+    fn next_byte(&mut self) {
+        self.bytes = &self.bytes[1..];
+    }
+
+    #[inline]
+    fn raw_char(&self) -> u8 {
+        self.bytes[0]
+    }
+
+    #[inline]
+    fn char(&self) -> u8 {
+        self.char_at(0)
+    }
+
+    #[inline]
+    fn char_at(&self, index: usize) -> u8 {
+        self.bytes[index].to_ascii_lowercase()
+    }
+}
+
 impl Like for str {
     type Err = InvalidPatternError;
 
@@ -320,25 +434,164 @@ impl Like for [u8] {
     }
 }
 
+impl ILike for str {
+    type Err = InvalidPatternError;
+
+    #[inline]
+    fn ilike(&self, pattern: &Self) -> Result<bool, Self::Err> {
+        let mut input = ICStrTraverser::new(self);
+        let mut pattern = ICStrTraverser::new(pattern);
+        let result = like(&mut input, &mut pattern)?;
+        Ok(matches!(result, Matched::True))
+    }
+}
+
+impl ILike for [u8] {
+    type Err = InvalidPatternError;
+
+    #[inline]
+    fn ilike(&self, pattern: &Self) -> Result<bool, Self::Err> {
+        let mut input = ICBytesTraverser::new(self);
+        let mut pattern = ICBytesTraverser::new(pattern);
+        let result = like(&mut input, &mut pattern)?;
+        Ok(matches!(result, Matched::True))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::Like;
+    use super::*;
+    use std::fmt::Debug;
 
-    #[test]
-    fn test_like_str() {
-        assert!("hello我的world".like("%").unwrap());
-        assert!("hello我的world".like("he%world").unwrap());
-        assert!("hello我的world".like("%我%").unwrap());
-        assert!("hello我的world".like("he%d").unwrap());
-        assert!("hello我的world".like("h%我_%").unwrap());
+    fn like_test<T: Like + ?Sized>(input: &T, pattern: &T, result: bool)
+    where
+        T::Err: Debug,
+    {
+        assert_eq!(input.like(pattern).unwrap(), result);
+        assert_eq!(input.not_like(pattern).unwrap(), !result);
+    }
+
+    fn ilike_test<T: ILike + ?Sized>(input: &T, pattern: &T, result: bool)
+    where
+        T::Err: Debug,
+    {
+        assert_eq!(input.ilike(pattern).unwrap(), result);
+        assert_eq!(input.not_ilike(pattern).unwrap(), !result);
+    }
+
+    fn error_test<T: Like + ILike + ?Sized>(input: &T, error_pattern: &T) {
+        assert!(input.like(error_pattern).is_err());
+        assert!(input.not_like(error_pattern).is_err());
+        assert!(input.ilike(error_pattern).is_err());
+        assert!(input.not_ilike(error_pattern).is_err());
     }
 
     #[test]
-    fn test_like_bytes() {
-        assert!(b"hello".like(b"%").unwrap());
-        assert!(b"hello".like(b"he%").unwrap());
-        assert!(b"hello".like(b"%llo").unwrap());
-        assert!(b"hello".like(b"he%o").unwrap());
-        assert!(b"hello".like(b"h_l%o").unwrap());
+    fn test_pattern_error() {
+        // LIKE pattern must not end with escape character;
+        // pattern end with escape character will return error.
+        error_test("H", "\\");
+        error_test("Hello,世界!", "Hello,世界\\");
+        error_test(&b"H"[..], b"\\");
+        error_test(&b"Hello!"[..], b"Hello\\");
+    }
+
+    #[test]
+    fn test_percent_sign() {
+        // a percent sign (%) matches any sequence of zero or more characters
+        let str = "Hello,世界!";
+        like_test(str, "%", true);
+        like_test(str, "%%%%%%%%%", true);
+        like_test(str, "%%%%%%%%%%", true);
+        ilike_test(str, "%", true);
+        ilike_test(str, "%%%%%%%%%", true);
+        ilike_test(str, "%%%%%%%%%%", true);
+
+        let bytes = &b"Hello!"[..];
+        like_test(bytes, b"%", true);
+        like_test(bytes, b"%%%%%%", true);
+        like_test(bytes, b"%%%%%%%", true);
+        ilike_test(bytes, b"%", true);
+        ilike_test(bytes, b"%%%%%%", true);
+        ilike_test(bytes, b"%%%%%%%", true);
+    }
+
+    #[test]
+    fn test_underscore() {
+        // An underscore (_) in pattern stands for (matches) any single character
+        let str: &str = "Hello,世界!";
+        like_test(str, "_", false);
+        like_test(str, "________", false);
+        like_test(str, "_________", true);
+        like_test(str, "__________", false);
+        ilike_test(str, "_", false);
+        ilike_test(str, "________", false);
+        ilike_test(str, "_________", true);
+        ilike_test(str, "__________", false);
+
+        let bytes: &[u8] = b"Hello!";
+        like_test(bytes, b"_", false);
+        like_test(bytes, b"_____", false);
+        like_test(bytes, b"______", true);
+        like_test(bytes, b"_______", false);
+        ilike_test(bytes, b"_", false);
+        ilike_test(bytes, b"_____", false);
+        ilike_test(bytes, b"______", true);
+        ilike_test(bytes, b"_______", false);
+    }
+
+    #[test]
+    fn test_pattern_without_sign() {
+        // If pattern does not contain percent signs or underscores,
+        // then the pattern only represents the string itself.
+        let str_lower: &str = "hello,世界!";
+        let str_upper: &str = "Hello,世界!";
+        like_test(str_upper, "Hello", false);
+        like_test(str_upper, "Hello,!", false);
+        like_test(str_upper, "Hello,世界!", true);
+        like_test(str_upper, "hello,世界!", false);
+        ilike_test(str_upper, "hello,世界!", true);
+        ilike_test(str_lower, "Hello,世界!", true);
+
+        let bytes_lower: &[u8] = b"hello!";
+        let bytes_upper: &[u8] = b"Hello!";
+        like_test(bytes_upper, b"Hello", false);
+        like_test(bytes_upper, b"Hello!", true);
+        like_test(bytes_upper, b"hello!", false);
+        ilike_test(bytes_upper, b"hello!", true);
+        ilike_test(bytes_lower, b"Hello!", true);
+    }
+
+    #[test]
+    fn test_mixed_pattern() {
+        // Mix the string, percent sign(%) and underscores(_) in the input,
+        // and make sure the combination works
+        let str: &str = "Abc";
+        like_test(str, "A%_", true);
+        like_test(str, "A_%", true);
+        like_test(str, "%b_", true);
+        like_test(str, "%_c", true);
+        like_test(str, "_b%", true);
+        like_test(str, "_%c", true);
+        ilike_test(str, "a%_", true);
+        ilike_test(str, "a_%", true);
+        ilike_test(str, "%B_", true);
+        ilike_test(str, "%_C", true);
+        ilike_test(str, "_B%", true);
+        ilike_test(str, "_%C", true);
+
+        let bytes: &[u8] = b"Abc";
+        like_test(bytes, b"A%_", true);
+        like_test(bytes, b"A_%", true);
+        like_test(bytes, b"%b_", true);
+        like_test(bytes, b"%_c", true);
+        like_test(bytes, b"_b%", true);
+        like_test(bytes, b"_%c", true);
+        ilike_test(bytes, b"a%_", true);
+        ilike_test(bytes, b"a_%", true);
+        ilike_test(bytes, b"%B_", true);
+        ilike_test(bytes, b"%_C", true);
+        ilike_test(bytes, b"_B%", true);
+        ilike_test(bytes, b"_%C", true);
     }
 }

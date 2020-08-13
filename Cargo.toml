@@ -7,3 +7,10 @@ readme = "README.md"
 license = "Apache-2.0"
 description = "A SQL like style pattern matching."
 keywords = ["like", "pattern matching"]
+
+[dev-dependencies]
+criterion = "0.3.3"
+
+[[bench]]
+name = "like"
+harness = false
