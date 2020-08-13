@@ -69,11 +69,35 @@ pub trait ILike {
 
 trait Traverser {
     fn len(&self) -> usize;
-    fn next_char(&mut self);
-    fn next_byte(&mut self);
-    fn raw_char(&self) -> u8;
-    fn char(&self) -> u8;
-    fn char_at(&self, index: usize) -> u8;
+
+    fn advance_byte(&mut self);
+
+    #[inline]
+    fn advance_char(&mut self) {
+        self.advance_byte()
+    }
+
+    fn raw_byte_at(&self, index: usize) -> u8;
+
+    #[inline]
+    fn next_raw_byte(&self) -> u8 {
+        self.raw_byte_at(0)
+    }
+
+    #[inline]
+    fn byte_at(&self, index: usize) -> u8 {
+        self.raw_byte_at(index)
+    }
+
+    #[inline]
+    fn next_byte(&self) -> u8 {
+        self.byte_at(0)
+    }
+
+    #[inline]
+    fn next_raw_char(&self) -> char {
+        self.next_raw_byte() as char
+    }
 }
 
 #[derive(PartialEq, Copy, Clone)]
@@ -85,7 +109,7 @@ enum Matched {
 
 fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, InvalidPatternError> {
     // Fast path for match-everything pattern
-    if pattern.len() == 1 && pattern.raw_char() == b'%' {
+    if pattern.len() == 1 && pattern.next_raw_byte() == b'%' {
         return Ok(Matched::True);
     }
 
@@ -96,18 +120,18 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
     // text and pattern on a byte by byte basis, even for multi-byte
     // encodings.
     while input.len() > 0 && pattern.len() > 0 {
-        if pattern.raw_char() == b'\\' {
+        if pattern.next_raw_byte() == b'\\' {
             // Next pattern byte must match literally, whatever it is
-            pattern.next_byte();
+            pattern.advance_byte();
             // ... and there had better be one, per SQL standard
             if pattern.len() == 0 {
                 return Err(InvalidPatternError);
             }
 
-            if input.char() != pattern.char() {
+            if input.next_byte() != pattern.next_byte() {
                 return Ok(Matched::False);
             }
-        } else if pattern.raw_char() == b'%' {
+        } else if pattern.next_raw_byte() == b'%' {
             // % processing is essentially a search for a text position at
             // which the remainder of the text matches the remainder of the
             // pattern, using a recursive call to check each potential match.
@@ -119,19 +143,19 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
             // we will always run the recursive search loop using a pattern
             // fragment that begins with a literal character-to-match, thereby
             // not recursing more than we have to.
-            pattern.next_byte();
+            pattern.advance_byte();
 
             while pattern.len() > 0 {
-                let pattern_raw_char = pattern.raw_char();
+                let pattern_raw_char = pattern.next_raw_byte();
                 if pattern_raw_char == b'%' {
-                    pattern.next_byte();
+                    pattern.advance_byte();
                 } else if pattern_raw_char == b'_' {
                     // If not enough text left to match the pattern, ABORT
                     if input.len() == 0 {
                         return Ok(Matched::Abort);
                     }
-                    input.next_char();
-                    pattern.next_byte();
+                    input.advance_char();
+                    pattern.advance_byte();
                 } else {
                     break; // Reached a non-wildcard pattern char
                 }
@@ -150,35 +174,35 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
             // more than we have to.  This fact also guarantees that we don't
             // have to consider a match to the zero-length substring at the
             // end of the text.
-            let first_pat = if pattern.raw_char() == b'\\' {
+            let first_pat = if pattern.next_raw_byte() == b'\\' {
                 if pattern.len() < 2 {
                     return Err(InvalidPatternError);
                 }
-                pattern.char_at(1)
+                pattern.byte_at(1)
             } else {
-                pattern.char()
+                pattern.next_byte()
             };
 
             while input.len() > 0 {
-                if input.char() == first_pat {
+                if input.next_byte() == first_pat {
                     let matched = like(input, pattern)?;
                     if matched != Matched::False {
                         return Ok(matched); // True or Abort
                     }
                 }
 
-                input.next_char();
+                input.advance_char();
             }
 
             // End of text with no match, so no point in trying later places
             // to start matching this pattern.
             return Ok(Matched::Abort);
-        } else if pattern.raw_char() == b'_' {
+        } else if pattern.next_raw_byte() == b'_' {
             // _ matches any single character, and we know there is one
-            input.next_char();
-            pattern.next_byte();
+            input.advance_char();
+            pattern.advance_byte();
             continue;
-        } else if pattern.char() != input.char() {
+        } else if pattern.next_byte() != input.next_byte() {
             // non-wildcard pattern char fails to match text char
             return Ok(Matched::False);
         }
@@ -193,8 +217,8 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
         // on character boundaries.  And we know that no backend-legal
         // encoding allows ASCII characters such as '%' to appear as non-first
         // bytes of characters, so we won't mistakenly detect a new wildcard.
-        input.next_byte();
-        pattern.next_byte();
+        input.advance_byte();
+        pattern.advance_byte();
     }
 
     if input.len() > 0 {
@@ -203,8 +227,8 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
 
     // End of text, but perhaps not of pattern.  Match iff the remaining
     // pattern can match a zero-length string, ie, it's zero or more %'s.
-    while pattern.len() > 0 && pattern.raw_char() == b'%' {
-        pattern.next_byte();
+    while pattern.len() > 0 && pattern.next_raw_byte() == b'%' {
+        pattern.advance_byte();
     }
     if pattern.len() == 0 {
         return Ok(Matched::True);
@@ -228,15 +252,64 @@ impl Display for InvalidPatternError {
 
 impl Error for InvalidPatternError {}
 
-struct StrTraverser<'a> {
+struct Bytes<'a> {
     bytes: &'a [u8],
+}
+
+impl<'a> Bytes<'a> {
+    #[inline]
+    const fn from_str(s: &'a str) -> Self {
+        Self {
+            bytes: s.as_bytes(),
+        }
+    }
+
+    #[inline]
+    const fn from_bytes(bytes: &'a [u8]) -> Self {
+        Self { bytes }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.bytes.len()
+    }
+
+    #[inline]
+    fn advance_byte(&mut self) {
+        self.bytes = &self.bytes[1..];
+    }
+
+    /// Advance a UTF-8 character.
+    #[inline]
+    fn advance_char(&mut self) {
+        self.advance_byte();
+        while !self.bytes.is_empty() && (self.raw_byte_at(0) & 0xC0) == 0x80 {
+            self.advance_byte();
+        }
+    }
+
+    #[inline]
+    fn raw_byte_at(&self, index: usize) -> u8 {
+        self.bytes[index]
+    }
+
+    /// Next UTF-8 character.
+    #[inline]
+    fn next_raw_char(&self) -> char {
+        let str = unsafe { std::str::from_utf8_unchecked(self.bytes) };
+        str.chars().next().unwrap()
+    }
+}
+
+struct StrTraverser<'a> {
+    bytes: Bytes<'a>,
 }
 
 impl<'a> StrTraverser<'a> {
     #[inline]
     const fn new(s: &'a str) -> Self {
         Self {
-            bytes: s.as_bytes(),
+            bytes: Bytes::from_str(s),
         }
     }
 }
@@ -248,42 +321,36 @@ impl<'a> Traverser for StrTraverser<'a> {
     }
 
     #[inline]
-    fn next_char(&mut self) {
-        self.next_byte();
-        while !self.bytes.is_empty() && (self.raw_char() & 0xC0) == 0x80 {
-            self.next_byte();
-        }
+    fn advance_byte(&mut self) {
+        self.bytes.advance_byte();
     }
 
     #[inline]
-    fn next_byte(&mut self) {
-        self.bytes = &self.bytes[1..];
+    fn advance_char(&mut self) {
+        self.bytes.advance_char()
     }
 
     #[inline]
-    fn raw_char(&self) -> u8 {
-        self.bytes[0]
+    fn raw_byte_at(&self, index: usize) -> u8 {
+        self.bytes.raw_byte_at(index)
     }
 
     #[inline]
-    fn char(&self) -> u8 {
-        self.char_at(0)
-    }
-
-    #[inline]
-    fn char_at(&self, index: usize) -> u8 {
-        self.bytes[index]
+    fn next_raw_char(&self) -> char {
+        self.bytes.next_raw_char()
     }
 }
 
 struct BytesTraverser<'a> {
-    bytes: &'a [u8],
+    bytes: Bytes<'a>,
 }
 
 impl<'a> BytesTraverser<'a> {
     #[inline]
     const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes }
+        Self {
+            bytes: Bytes::from_bytes(bytes),
+        }
     }
 }
 
@@ -294,119 +361,95 @@ impl<'a> Traverser for BytesTraverser<'a> {
     }
 
     #[inline]
-    fn next_char(&mut self) {
-        self.next_byte()
+    fn advance_byte(&mut self) {
+        self.bytes.advance_byte();
     }
 
     #[inline]
-    fn next_byte(&mut self) {
-        self.bytes = &self.bytes[1..];
-    }
-
-    #[inline]
-    fn raw_char(&self) -> u8 {
-        self.bytes[0]
-    }
-
-    #[inline]
-    fn char(&self) -> u8 {
-        self.char_at(0)
-    }
-
-    #[inline]
-    fn char_at(&self, index: usize) -> u8 {
-        self.bytes[index]
+    fn raw_byte_at(&self, index: usize) -> u8 {
+        self.bytes.raw_byte_at(index)
     }
 }
 
-struct ICStrTraverser<'a> {
-    bytes: &'a [u8],
+/// Case-insensitive str traverser
+struct CiStrTraverser<'a> {
+    bytes: Bytes<'a>,
 }
 
-impl<'a> ICStrTraverser<'a> {
+impl<'a> CiStrTraverser<'a> {
     #[inline]
     const fn new(s: &'a str) -> Self {
         Self {
-            bytes: s.as_bytes(),
+            bytes: Bytes::from_str(s),
         }
     }
 }
 
-impl<'a> Traverser for ICStrTraverser<'a> {
+impl<'a> Traverser for CiStrTraverser<'a> {
     #[inline]
     fn len(&self) -> usize {
         self.bytes.len()
     }
 
     #[inline]
-    fn next_char(&mut self) {
-        self.next_byte();
-        while !self.bytes.is_empty() && (self.raw_char() & 0xC0) == 0x80 {
-            self.next_byte();
-        }
+    fn advance_byte(&mut self) {
+        self.bytes.advance_byte();
     }
 
     #[inline]
-    fn next_byte(&mut self) {
-        self.bytes = &self.bytes[1..];
+    fn advance_char(&mut self) {
+        self.bytes.advance_char()
     }
 
     #[inline]
-    fn raw_char(&self) -> u8 {
-        self.bytes[0]
+    fn raw_byte_at(&self, index: usize) -> u8 {
+        self.bytes.raw_byte_at(index)
     }
 
     #[inline]
-    fn char(&self) -> u8 {
-        self.char_at(0)
+    fn byte_at(&self, index: usize) -> u8 {
+        self.raw_byte_at(index).to_ascii_lowercase()
     }
 
     #[inline]
-    fn char_at(&self, index: usize) -> u8 {
-        self.bytes[index].to_ascii_lowercase()
+    fn next_raw_char(&self) -> char {
+        self.bytes.next_raw_char()
     }
 }
 
-struct ICBytesTraverser<'a> {
-    bytes: &'a [u8],
+/// Case-insensitive bytes traverser
+struct CiBytesTraverser<'a> {
+    bytes: Bytes<'a>,
 }
 
-impl<'a> ICBytesTraverser<'a> {
+impl<'a> CiBytesTraverser<'a> {
     #[inline]
     const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes }
+        Self {
+            bytes: Bytes::from_bytes(bytes),
+        }
     }
 }
 
-impl<'a> Traverser for ICBytesTraverser<'a> {
+impl<'a> Traverser for CiBytesTraverser<'a> {
     #[inline]
     fn len(&self) -> usize {
         self.bytes.len()
     }
 
     #[inline]
-    fn next_char(&mut self) {
-        self.next_byte()
+    fn advance_byte(&mut self) {
+        self.bytes.advance_byte();
     }
 
     #[inline]
-    fn next_byte(&mut self) {
-        self.bytes = &self.bytes[1..];
+    fn raw_byte_at(&self, index: usize) -> u8 {
+        self.bytes.raw_byte_at(index)
     }
 
     #[inline]
-    fn raw_char(&self) -> u8 {
-        self.bytes[0]
-    }
-
-    #[inline]
-    fn char(&self) -> u8 {
-        self.char_at(0)
-    }
-
-    #[inline]
-    fn char_at(&self, index: usize) -> u8 {
-        self.bytes[index].to_ascii_lowercase()
+    fn byte_at(&self, index: usize) -> u8 {
+        self.raw_byte_at(index).to_ascii_lowercase()
     }
 }
 
@@ -439,8 +482,8 @@ impl ILike for str {
 
     #[inline]
     fn ilike(&self, pattern: &Self) -> Result<bool, Self::Err> {
-        let mut input = ICStrTraverser::new(self);
-        let mut pattern = ICStrTraverser::new(pattern);
+        let mut input = CiStrTraverser::new(self);
+        let mut pattern = CiStrTraverser::new(pattern);
         let result = like(&mut input, &mut pattern)?;
         Ok(matches!(result, Matched::True))
     }
@@ -451,8 +494,8 @@ impl ILike for [u8] {
 
     #[inline]
     fn ilike(&self, pattern: &Self) -> Result<bool, Self::Err> {
-        let mut input = ICBytesTraverser::new(self);
-        let mut pattern = ICBytesTraverser::new(pattern);
+        let mut input = CiBytesTraverser::new(self);
+        let mut pattern = CiBytesTraverser::new(pattern);
         let result = like(&mut input, &mut pattern)?;
         Ok(matches!(result, Matched::True))
     }
