@@ -16,6 +16,32 @@
 // See `like.c` and `like_match.c` in PostgreSQL's source code.
 
 //! A SQL `like` style pattern matching.
+//!
+//! ## Usage
+//!
+//! To do a patten matching, use `Like`:
+//!
+//! ```
+//! use like::Like;
+//!
+//! assert!("Hello, world!".like("Hello%").unwrap());
+//! ```
+//!
+//! To do a case-insensitive pattern matching, use `ILike`:
+//!
+//! ```
+//! use like::ILike;
+//!
+//! assert!("Hello, world!".ilike("HELLO%").unwrap());
+//! ```
+//!
+//! To convert the pattern to use standard backslash escape convention, use `Escape`:
+//!
+//! ```
+//! use like::Escape;
+//!
+//! assert_eq!("Hello$%".escape("$").unwrap(), "Hello\\%");
+//! ```
 
 use std::error::Error;
 use std::fmt::{self, Display};
