@@ -29,7 +29,7 @@ To convert the pattern to use standard backslash escape convention, use `Escape`
 ```Rust
 use like::Escape;
 
-assert_eq!("Hello$%".escape("$").unwrap(), "Hello\\\\%");
+assert_eq!("Hello$%".escape("$").unwrap(), "Hello\\%");
 ```
 
 ## License
