@@ -67,6 +67,19 @@ pub trait ILike {
     }
 }
 
+/// Convert the pattern to use standard backslash escape convention.
+pub trait Escape {
+    /// The associated error which can be returned from pattern matching.
+    type Err;
+    /// The output type of conversion.
+    type Output;
+
+    /// Change if `self`  have a escape character.
+    ///
+    /// Returns new pattern if there are any escape characters in the pattern.
+    fn escape(&self, esc: &Self) -> Result<Self::Output, Self::Err>;
+}
+
 trait Traverser {
     fn len(&self) -> usize;
 
@@ -106,6 +119,19 @@ enum Matched {
     False,
     Abort,
 }
+
+/// Errors which can occur when attempting to match a pattern.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct InvalidPatternError;
+
+impl Display for InvalidPatternError {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid pattern")
+    }
+}
+
+impl Error for InvalidPatternError {}
 
 fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, InvalidPatternError> {
     // Fast path for match-everything pattern
@@ -239,19 +265,6 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
     Ok(Matched::Abort)
 }
 
-/// Errors which can occur when attempting to match a pattern.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct InvalidPatternError;
-
-impl Display for InvalidPatternError {
-    #[inline]
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid pattern")
-    }
-}
-
-impl Error for InvalidPatternError {}
-
 struct Bytes<'a> {
     bytes: &'a [u8],
 }
@@ -298,6 +311,17 @@ impl<'a> Bytes<'a> {
     fn next_raw_char(&self) -> char {
         let str = unsafe { std::str::from_utf8_unchecked(self.bytes) };
         str.chars().next().unwrap()
+    }
+
+    #[inline]
+    fn to_str(&self) -> String {
+        let str = unsafe { std::str::from_utf8_unchecked(self.bytes) };
+        str.to_string()
+    }
+
+    #[inline]
+    fn to_vec(&self) -> Vec<u8> {
+        self.bytes.into()
     }
 }
 
@@ -501,6 +525,148 @@ impl ILike for [u8] {
     }
 }
 
+trait Owned {
+    fn new(size: usize) -> Self;
+    fn append(&mut self, ch: char);
+}
+
+trait ToOwned {
+    type Owned: Owned;
+
+    fn to_owned(&self) -> Self::Owned;
+}
+
+/// Errors which can occur when attempting to convert escape.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct InvalidEscapeError;
+
+impl Display for InvalidEscapeError {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "invalid escape")
+    }
+}
+
+impl Error for InvalidEscapeError {}
+
+fn escape<T, R>(pat: &mut T, esc: &mut T) -> Result<R, InvalidEscapeError>
+where
+    T: Traverser + ToOwned<Owned = R>,
+    R: Owned,
+{
+    // Worst-case pattern growth is 2x --- unlikely, but it's hardly worth
+    // trying to calculate the size more accurately than that.
+    let mut result = R::new(pat.len() * 2);
+
+    if esc.len() == 0 {
+        // No escape character is wanted.  Double any backslashes in the
+        // pattern to make them act like ordinary characters.
+        while pat.len() > 0 {
+            if pat.next_raw_byte() == b'\\' {
+                result.append('\\');
+            }
+            result.append(pat.next_raw_char());
+            pat.advance_char();
+        }
+    } else {
+        // The specified escape must be only a single character.
+        let e = esc.next_raw_char();
+        esc.advance_char();
+        if esc.len() != 0 {
+            return Err(InvalidEscapeError);
+        }
+
+        // If specified escape is '\', just copy the pattern as-is.
+        if e == '\\' {
+            return Ok(pat.to_owned());
+        }
+
+        // Otherwise, convert occurrences of the specified escape character to
+        // '\', and double occurrences of '\' --- unless they immediately
+        // follow an escape character!
+        let mut afterescape = false;
+        while pat.len() > 0 {
+            if pat.next_raw_char() == e && !afterescape {
+                result.append('\\');
+                pat.advance_char();
+                afterescape = true;
+            } else if pat.next_raw_byte() == b'\\' {
+                result.append('\\');
+                if !afterescape {
+                    result.append('\\');
+                }
+                pat.advance_char();
+                afterescape = false;
+            } else {
+                result.append(pat.next_raw_char());
+                pat.advance_char();
+                afterescape = false;
+            }
+        }
+    }
+    Ok(result)
+}
+
+impl Owned for String {
+    fn new(size: usize) -> String {
+        String::with_capacity(size)
+    }
+
+    fn append(&mut self, ch: char) {
+        self.push(ch)
+    }
+}
+
+impl Owned for Vec<u8> {
+    fn new(size: usize) -> Vec<u8> {
+        Vec::with_capacity(size)
+    }
+
+    fn append(&mut self, ch: char) {
+        self.push(ch as u8)
+    }
+}
+
+impl<'a> ToOwned for StrTraverser<'a> {
+    type Owned = String;
+
+    fn to_owned(&self) -> Self::Owned {
+        self.bytes.to_str()
+    }
+}
+
+impl<'a> ToOwned for BytesTraverser<'a> {
+    type Owned = Vec<u8>;
+
+    fn to_owned(&self) -> Self::Owned {
+        self.bytes.to_vec()
+    }
+}
+
+impl Escape for str {
+    type Err = InvalidEscapeError;
+    type Output = String;
+
+    #[inline]
+    fn escape(&self, esc: &Self) -> Result<Self::Output, Self::Err> {
+        let mut p = StrTraverser::new(self);
+        let mut e = StrTraverser::new(esc);
+        escape(&mut p, &mut e)
+    }
+}
+
+impl Escape for [u8] {
+    type Err = InvalidEscapeError;
+    type Output = Vec<u8>;
+
+    #[inline]
+    fn escape(&self, esc: &Self) -> Result<Self::Output, Self::Err> {
+        let mut p = BytesTraverser::new(self);
+        let mut e = BytesTraverser::new(esc);
+        escape(&mut p, &mut e)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -522,7 +688,7 @@ mod tests {
         assert_eq!(input.not_ilike(pattern).unwrap(), !result);
     }
 
-    fn error_test<T: Like + ILike + ?Sized>(input: &T, error_pattern: &T) {
+    fn pattern_error_test<T: Like + ILike + ?Sized>(input: &T, error_pattern: &T) {
         assert!(input.like(error_pattern).is_err());
         assert!(input.not_like(error_pattern).is_err());
         assert!(input.ilike(error_pattern).is_err());
@@ -533,10 +699,10 @@ mod tests {
     fn test_pattern_error() {
         // LIKE pattern must not end with escape character;
         // pattern end with escape character will return error.
-        error_test("H", "\\");
-        error_test("Hello,世界!", "Hello,世界\\");
-        error_test(&b"H"[..], b"\\");
-        error_test(&b"Hello!"[..], b"Hello\\");
+        pattern_error_test("H", "\\");
+        pattern_error_test("Hello,世界!", "Hello,世界\\");
+        pattern_error_test(&b"H"[..], b"\\");
+        pattern_error_test(&b"Hello!"[..], b"Hello\\");
     }
 
     #[test]
@@ -636,5 +802,53 @@ mod tests {
         ilike_test(bytes, b"%_C", true);
         ilike_test(bytes, b"_B%", true);
         ilike_test(bytes, b"_%C", true);
+    }
+
+    fn escape_test<T: Escape + ?Sized, R: Into<T::Output>>(input: &T, escape: &T, result: R)
+    where
+        T::Output: Debug + PartialEq,
+        T::Err: Debug,
+    {
+        assert_eq!(input.escape(escape).unwrap(), result.into());
+    }
+
+    fn escape_error_test<T: Escape + ?Sized>(input: &T, error_escape: &T) {
+        assert!(input.escape(error_escape).is_err());
+    }
+
+    #[test]
+    fn test_escape_error() {
+        // Escape string must be empty or one character;
+        // if Escape string is more than one character will return error.
+        escape_error_test("Hello,世界!", ",!");
+        escape_error_test(&b"Hello,World!"[..], b",!");
+    }
+
+    #[test]
+    fn test_escape() {
+        let str: &str = "Hello,世界!";
+        escape_test(str, "", str);
+        escape_test(str, "\\", str);
+        escape_test(str, "?", "Hello,世界!");
+        escape_test(str, "H", "\\ello,世界!");
+        escape_test(str, ",", "Hello\\世界!");
+        escape_test(str, "!", "Hello,世界\\");
+        escape_test(str, "世", "Hello,\\界!");
+        escape_test("Hello,,世界!", ",", "Hello\\,世界!");
+        escape_test("Hello!世界!", "!", "Hello\\世界\\");
+        escape_test("Hello\\!世界!", "", "Hello\\\\!世界!");
+        escape_test("Hello$%$_世界!", "$", "Hello\\%\\_世界!");
+
+        let bytes: &[u8] = b"Hello,World!";
+        escape_test(bytes, b"", bytes);
+        escape_test(bytes, b"\\", bytes);
+        escape_test(bytes, b"?", &b"Hello,World!"[..]);
+        escape_test(bytes, b"H", &b"\\ello,World!"[..]);
+        escape_test(bytes, b",", &b"Hello\\World!"[..]);
+        escape_test(bytes, b"!", &b"Hello,World\\"[..]);
+        escape_test(&b"Hello,,World!"[..], b",", &b"Hello\\,World!"[..]);
+        escape_test(&b"Hello!World!"[..], b"!", &b"Hello\\World\\"[..]);
+        escape_test(&b"Hello\\World!"[..], b"", &b"Hello\\\\World!"[..]);
+        escape_test(&b"Hello$%$_World!"[..], b"$", &b"Hello\\%\\_World!"[..]);
     }
 }

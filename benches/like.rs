@@ -1,7 +1,7 @@
 // Copyright 2020 CoD Team. All Rights Reserved.
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use like::{ILike, Like};
+use like::{Escape, ILike, Like};
 
 fn bench_like<T: Like + ?Sized>(c: &mut Criterion, input: &T, pattern: &T, id: &str, nid: &str) {
     c.bench_function(id, |bench| bench.iter(|| black_box(input.like(pattern))));
@@ -15,6 +15,10 @@ fn bench_ilike<T: ILike + ?Sized>(c: &mut Criterion, input: &T, pattern: &T, id:
     c.bench_function(nid, |bench| {
         bench.iter(|| black_box(input.not_ilike(pattern)))
     });
+}
+
+fn bench_escape<T: Escape + ?Sized>(c: &mut Criterion, input: &T, esc: &T, id: &str) {
+    c.bench_function(id, |bench| bench.iter(|| black_box(input.escape(esc))));
 }
 
 fn bench_str_like(c: &mut Criterion) {
@@ -35,11 +39,22 @@ fn bench_bytes_ilike(c: &mut Criterion) {
     bench_ilike(c, input, b"HellO%", "ilike_bytes", "not_ilike_bytes");
 }
 
+fn bench_str_escape(c: &mut Criterion) {
+    bench_escape(c, "hello$_world!", "$", "escape_str");
+}
+
+fn bench_bytes_escape(c: &mut Criterion) {
+    let input = &b"hello$_world!"[..];
+    bench_escape(c, input, b"$", "escape_bytes");
+}
+
 criterion_group!(
     like_bench,
     bench_str_like,
     bench_bytes_like,
     bench_str_ilike,
     bench_bytes_ilike,
+    bench_str_escape,
+    bench_bytes_escape,
 );
 criterion_main!(like_bench);
