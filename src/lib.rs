@@ -159,7 +159,10 @@ impl Display for InvalidPatternError {
 
 impl Error for InvalidPatternError {}
 
-fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, InvalidPatternError> {
+fn like<T: Traverser + Clone>(
+    input: &mut T,
+    pattern: &mut T,
+) -> Result<Matched, InvalidPatternError> {
     // Fast path for match-everything pattern
     if pattern.len() == 1 && pattern.next_raw_byte() == b'%' {
         return Ok(Matched::True);
@@ -237,7 +240,9 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
 
             while input.len() > 0 {
                 if input.next_byte() == first_pat {
-                    let matched = like(input, pattern)?;
+                    let mut i = input.clone();
+                    let mut p = pattern.clone();
+                    let matched = like(&mut i, &mut p)?;
                     if matched != Matched::False {
                         return Ok(matched); // True or Abort
                     }
@@ -291,6 +296,7 @@ fn like<T: Traverser>(input: &mut T, pattern: &mut T) -> Result<Matched, Invalid
     Ok(Matched::Abort)
 }
 
+#[derive(Clone)]
 struct Bytes<'a> {
     bytes: &'a [u8],
 }
@@ -351,6 +357,7 @@ impl<'a> Bytes<'a> {
     }
 }
 
+#[derive(Clone)]
 struct StrTraverser<'a> {
     bytes: Bytes<'a>,
 }
@@ -391,6 +398,7 @@ impl<'a> Traverser for StrTraverser<'a> {
     }
 }
 
+#[derive(Clone)]
 struct BytesTraverser<'a> {
     bytes: Bytes<'a>,
 }
@@ -422,6 +430,7 @@ impl<'a> Traverser for BytesTraverser<'a> {
 }
 
 /// Case-insensitive str traverser
+#[derive(Clone)]
 struct CiStrTraverser<'a> {
     bytes: Bytes<'a>,
 }
@@ -468,6 +477,7 @@ impl<'a> Traverser for CiStrTraverser<'a> {
 }
 
 /// Case-insensitive bytes traverser
+#[derive(Clone)]
 struct CiBytesTraverser<'a> {
     bytes: Bytes<'a>,
 }
@@ -749,6 +759,18 @@ mod tests {
         ilike_test(bytes, b"%", true);
         ilike_test(bytes, b"%%%%%%", true);
         ilike_test(bytes, b"%%%%%%%", true);
+
+        let str2: &str = "601618";
+        let bytes2: &[u8] = b"601618";
+        like_test(str2, "%618", true);
+        ilike_test(str2, "%618", true);
+        like_test(bytes2, b"%618", true);
+        ilike_test(bytes2, b"%618", true);
+
+        // Test Utf8
+        let str3 = "中文测试";
+        like_test(str3, "%测试", true);
+        ilike_test(str3, "%测试", true);
     }
 
     #[test]
