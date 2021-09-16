@@ -1,4 +1,4 @@
-// Copyright 2020 CoD Technologies Corp.
+// Copyright 2020-2021 CoD Technologies Corp.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -153,7 +153,7 @@ pub struct InvalidPatternError;
 impl Display for InvalidPatternError {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid pattern")
+        write!(f, "pattern must not end with escape character")
     }
 }
 
@@ -574,12 +574,27 @@ trait ToOwned {
 
 /// Errors which can occur when attempting to convert escape.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct InvalidEscapeError;
+pub enum InvalidEscapeError {
+    /// Multiple Escape characters error.
+    MultiChars,
+    /// Error character following Escape.
+    InvalidEscape,
+}
 
 impl Display for InvalidEscapeError {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "invalid escape")
+        match self {
+            InvalidEscapeError::MultiChars => {
+                write!(f, "escape must be one character")
+            }
+            InvalidEscapeError::InvalidEscape => {
+                write!(
+                    f,
+                    "missing or illegal character following the escape character"
+                )
+            }
+        }
     }
 }
 
@@ -609,7 +624,7 @@ where
         let e = esc.next_raw_char();
         esc.advance_char();
         if esc.len() != 0 {
-            return Err(InvalidEscapeError);
+            return Err(InvalidEscapeError::MultiChars);
         }
 
         // If specified escape is '\', just copy the pattern as-is.
@@ -625,6 +640,10 @@ where
             if pat.next_raw_char() == e && !afterescape {
                 result.append('\\');
                 pat.advance_char();
+                let next_pat = pat.next_raw_char();
+                if next_pat != '%' && next_pat != '_' && next_pat != e {
+                    return Err(InvalidEscapeError::InvalidEscape);
+                }
                 afterescape = true;
             } else if pat.next_raw_byte() == b'\\' {
                 result.append('\\');
@@ -878,25 +897,25 @@ mod tests {
         escape_test(str, "", str);
         escape_test(str, "\\", str);
         escape_test(str, "?", "Hello,世界!");
-        escape_test(str, "H", "\\ello,世界!");
-        escape_test(str, ",", "Hello\\世界!");
-        escape_test(str, "!", "Hello,世界\\");
-        escape_test(str, "世", "Hello,\\界!");
+        escape_test("HHello,世界!", "H", "\\Hello,世界!");
         escape_test("Hello,,世界!", ",", "Hello\\,世界!");
-        escape_test("Hello!世界!", "!", "Hello\\世界\\");
+        escape_test("Hello,世界!!", "!", "Hello,世界\\!");
+        escape_test("Hello,世世界!", "世", "Hello,\\世界!");
+        escape_test("Hello,,,,世界!", ",", "Hello\\,\\,世界!");
+        escape_test("Hello!!世界!!", "!", "Hello\\!世界\\!");
         escape_test("Hello\\!世界!", "", "Hello\\\\!世界!");
-        escape_test("Hello$%$_世界!", "$", "Hello\\%\\_世界!");
+        escape_test("Hello$$%$$_世界!", "$", "Hello\\$%\\$_世界!");
 
         let bytes: &[u8] = b"Hello,World!";
         escape_test(bytes, b"", bytes);
         escape_test(bytes, b"\\", bytes);
         escape_test(bytes, b"?", &b"Hello,World!"[..]);
-        escape_test(bytes, b"H", &b"\\ello,World!"[..]);
-        escape_test(bytes, b",", &b"Hello\\World!"[..]);
-        escape_test(bytes, b"!", &b"Hello,World\\"[..]);
+        escape_test(&b"HHello,World!"[..], b"H", &b"\\Hello,World!"[..]);
         escape_test(&b"Hello,,World!"[..], b",", &b"Hello\\,World!"[..]);
-        escape_test(&b"Hello!World!"[..], b"!", &b"Hello\\World\\"[..]);
+        escape_test(&b"Hello,World!!"[..], b"!", &b"Hello,World\\!"[..]);
+        escape_test(&b"Hello,,,,World!"[..], b",", &b"Hello\\,\\,World!"[..]);
+        escape_test(&b"Hello!!World!!"[..], b"!", &b"Hello\\!World\\!"[..]);
         escape_test(&b"Hello\\World!"[..], b"", &b"Hello\\\\World!"[..]);
-        escape_test(&b"Hello$%$_World!"[..], b"$", &b"Hello\\%\\_World!"[..]);
+        escape_test(&b"Hello$$%$$_World!"[..], b"$", &b"Hello\\$%\\$_World!"[..]);
     }
 }
