@@ -12,7 +12,7 @@ homepage = "https://github.com/cod-technologies/like"
 documentation = "https://docs.rs/like/"
 
 [dev-dependencies]
-criterion = "0.3.3"
+bencher = "0.1.5"
 
 [[bench]]
 name = "like"

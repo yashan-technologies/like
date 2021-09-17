@@ -1,4 +1,4 @@
-// Copyright 2020 CoD Technologies Corp.
+// Copyright 2020-2021 CoD Technologies Corp.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,61 +12,80 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use bencher::{benchmark_group, benchmark_main, black_box, Bencher};
 use like::{Escape, ILike, Like};
 
-fn bench_like<T: Like + ?Sized>(c: &mut Criterion, input: &T, pattern: &T, id: &str, nid: &str) {
-    c.bench_function(id, |bench| bench.iter(|| black_box(input.like(pattern))));
-    c.bench_function(nid, |bench| {
-        bench.iter(|| black_box(input.not_like(pattern)))
-    });
+fn bench_str_like(bench: &mut Bencher) {
+    bench.iter(|| {
+        let _n = black_box("hello, world!").like(black_box("hello%"));
+    })
 }
 
-fn bench_ilike<T: ILike + ?Sized>(c: &mut Criterion, input: &T, pattern: &T, id: &str, nid: &str) {
-    c.bench_function(id, |bench| bench.iter(|| black_box(input.ilike(pattern))));
-    c.bench_function(nid, |bench| {
-        bench.iter(|| black_box(input.not_ilike(pattern)))
-    });
+fn bench_str_not_like(bench: &mut Bencher) {
+    bench.iter(|| {
+        let _n = black_box("hello, world!").not_like(black_box("hello%"));
+    })
 }
 
-fn bench_escape<T: Escape + ?Sized>(c: &mut Criterion, input: &T, esc: &T, id: &str) {
-    c.bench_function(id, |bench| bench.iter(|| black_box(input.escape(esc))));
+fn bench_str_ilike(bench: &mut Bencher) {
+    bench.iter(|| {
+        let _n = black_box("hello, world!").ilike(black_box("HellO%"));
+    })
 }
 
-fn bench_str_like(c: &mut Criterion) {
-    bench_like(c, "hello, world!", "hello%", "like_str", "not_like_str");
+fn bench_str_not_ilike(bench: &mut Bencher) {
+    bench.iter(|| {
+        let _n = black_box("hello, world!").not_ilike(black_box("HellO%"));
+    })
 }
 
-fn bench_bytes_like(c: &mut Criterion) {
-    let input = &b"hello, world!"[..];
-    bench_like(c, input, b"hello%", "like_bytes", "not_like_bytes");
+fn bench_bytes_like(bench: &mut Bencher) {
+    bench.iter(|| {
+        let _n = black_box(b"hello, world!").like(black_box(b"hello%"));
+    })
 }
 
-fn bench_str_ilike(c: &mut Criterion) {
-    bench_ilike(c, "hello, world!", "HellO%", "ilike_str", "not_ilike_str");
+fn bench_bytes_not_like(bench: &mut Bencher) {
+    bench.iter(|| {
+        let _n = black_box(b"hello, world!").not_like(black_box(b"hello%"));
+    })
 }
 
-fn bench_bytes_ilike(c: &mut Criterion) {
-    let input = &b"hello, world!"[..];
-    bench_ilike(c, input, b"HellO%", "ilike_bytes", "not_ilike_bytes");
+fn bench_bytes_ilike(bench: &mut Bencher) {
+    bench.iter(|| {
+        let _n = black_box(b"hello, world!").ilike(black_box(b"HellO%"));
+    })
 }
 
-fn bench_str_escape(c: &mut Criterion) {
-    bench_escape(c, "hello$_world!", "$", "escape_str");
+fn bench_bytes_not_ilike(bench: &mut Bencher) {
+    bench.iter(|| {
+        let _n = black_box(b"hello, world!").not_ilike(black_box(b"HellO%"));
+    })
 }
 
-fn bench_bytes_escape(c: &mut Criterion) {
-    let input = &b"hello$_world!"[..];
-    bench_escape(c, input, b"$", "escape_bytes");
+fn bench_str_escape(bench: &mut Bencher) {
+    bench.iter(|| {
+        let _n = black_box("hello$$_world!").escape(black_box("$"));
+    })
 }
 
-criterion_group!(
-    like_bench,
+fn bench_bytes_escape(bench: &mut Bencher) {
+    bench.iter(|| {
+        let _n = black_box(b"hello$$_world!").escape(black_box(b"$"));
+    })
+}
+
+benchmark_group!(
+    like_benches,
     bench_str_like,
+    bench_str_not_like,
     bench_bytes_like,
+    bench_bytes_not_like,
     bench_str_ilike,
+    bench_str_not_ilike,
     bench_bytes_ilike,
+    bench_bytes_not_ilike,
     bench_str_escape,
     bench_bytes_escape,
 );
-criterion_main!(like_bench);
+benchmark_main!(like_benches);
