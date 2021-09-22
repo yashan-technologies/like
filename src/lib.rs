@@ -640,9 +640,13 @@ where
             if pat.next_raw_char() == e && !afterescape {
                 result.append('\\');
                 pat.advance_char();
-                let next_pat = pat.next_raw_char();
-                if next_pat != '%' && next_pat != '_' && next_pat != e {
+                if pat.len() == 0 {
                     return Err(InvalidEscapeError::InvalidEscape);
+                } else {
+                    let next_pat = pat.next_raw_char();
+                    if next_pat != '%' && next_pat != '_' && next_pat != e {
+                        return Err(InvalidEscapeError::InvalidEscape);
+                    }
                 }
                 afterescape = true;
             } else if pat.next_raw_byte() == b'\\' {
@@ -888,6 +892,8 @@ mod tests {
         // Escape string must be empty or one character;
         // if Escape string is more than one character will return error.
         escape_error_test("Hello,世界!", ",!");
+        escape_error_test("Hello,世界!", "!");
+        escape_error_test("Hello,世界", "界");
         escape_error_test(&b"Hello,World!"[..], b",!");
     }
 
