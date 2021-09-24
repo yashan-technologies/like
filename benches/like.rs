@@ -17,49 +17,51 @@ use like::{Escape, ILike, Like};
 
 fn bench_str_like(bench: &mut Bencher) {
     bench.iter(|| {
-        let _n = black_box("hello, world!").like(black_box("hello%"));
+        let _n = Like::<true>::like(black_box("hello, world!"), black_box("hello%"));
     })
 }
 
 fn bench_str_not_like(bench: &mut Bencher) {
     bench.iter(|| {
-        let _n = black_box("hello, world!").not_like(black_box("hello%"));
+        let _n = Like::<true>::not_like(black_box("hello, world!"), black_box("hello%"));
     })
 }
 
 fn bench_str_ilike(bench: &mut Bencher) {
     bench.iter(|| {
-        let _n = black_box("hello, world!").ilike(black_box("HellO%"));
+        let _n = ILike::<true>::ilike(black_box("hello, world!"), black_box("Hello%"));
     })
 }
 
 fn bench_str_not_ilike(bench: &mut Bencher) {
     bench.iter(|| {
-        let _n = black_box("hello, world!").not_ilike(black_box("HellO%"));
+        let _n = ILike::<true>::not_ilike(black_box("hello, world!"), black_box("Hello%"));
     })
 }
 
 fn bench_bytes_like(bench: &mut Bencher) {
     bench.iter(|| {
-        let _n = black_box(b"hello, world!").like(black_box(b"hello%"));
+        let _n = Like::<true>::like(black_box(&b"hello, world!"[..]), black_box(&b"hello%"[..]));
     })
 }
 
 fn bench_bytes_not_like(bench: &mut Bencher) {
     bench.iter(|| {
-        let _n = black_box(b"hello, world!").not_like(black_box(b"hello%"));
+        let _n =
+            Like::<true>::not_like(black_box(&b"hello, world!"[..]), black_box(&b"hello%"[..]));
     })
 }
 
 fn bench_bytes_ilike(bench: &mut Bencher) {
     bench.iter(|| {
-        let _n = black_box(b"hello, world!").ilike(black_box(b"HellO%"));
+        let _n = ILike::<true>::ilike(black_box(&b"hello, world!"[..]), black_box(&b"Hello%"[..]));
     })
 }
 
 fn bench_bytes_not_ilike(bench: &mut Bencher) {
     bench.iter(|| {
-        let _n = black_box(b"hello, world!").not_ilike(black_box(b"HellO%"));
+        let _n =
+            ILike::<true>::not_ilike(black_box(&b"hello, world!"[..]), black_box(&b"Hello%"[..]));
     })
 }
 

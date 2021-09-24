@@ -24,7 +24,7 @@
 //! ```
 //! use like::Like;
 //!
-//! assert!("Hello, world!".like("Hello%").unwrap());
+//! assert!(Like::<false>::like("Hello, world!", "Hello%").unwrap());
 //! ```
 //!
 //! To do a case-insensitive pattern matching, use `ILike`:
@@ -32,7 +32,7 @@
 //! ```
 //! use like::ILike;
 //!
-//! assert!("Hello, world!".ilike("HELLO%").unwrap());
+//! assert!(ILike::<false>::ilike("Hello, world!", "HELLO%").unwrap());
 //! ```
 //!
 //! To convert the pattern to use standard backslash escape convention, use `Escape`:
@@ -52,7 +52,7 @@ use std::fmt::{self, Display};
 /// in that case `like` acts like the equals operator.
 /// An underscore (`_`) in pattern stands for (matches) any single character;
 /// a percent sign (`%`) matches any sequence of zero or more characters.
-pub trait Like {
+pub trait Like<const HAS_ESCAPE: bool> {
     /// The associated error which can be returned from pattern matching.
     type Err;
 
@@ -75,7 +75,7 @@ pub trait Like {
 /// `ilike` is a case-insensitive version of `like` style pattern matching;
 /// make the input and pattern to be lowercase and do comparison.
 /// Other internal implementation are the same as `like`.
-pub trait ILike {
+pub trait ILike<const HAS_ESCAPE: bool> {
     /// The associated error which can be returned from pattern matching.
     type Err;
 
@@ -153,16 +153,22 @@ pub struct InvalidPatternError;
 impl Display for InvalidPatternError {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "pattern must not end with escape character")
+        write!(
+            f,
+            "missing or illegal character following the escape character"
+        )
     }
 }
 
 impl Error for InvalidPatternError {}
 
-fn like<T: Traverser + Clone>(
+fn like<T, const HAS_ESCAPE: bool>(
     input: &mut T,
     pattern: &mut T,
-) -> Result<Matched, InvalidPatternError> {
+) -> Result<Matched, InvalidPatternError>
+where
+    T: Traverser + Clone,
+{
     // Fast path for match-everything pattern
     if pattern.len() == 1 && pattern.next_raw_byte() == b'%' {
         return Ok(Matched::True);
@@ -175,7 +181,7 @@ fn like<T: Traverser + Clone>(
     // text and pattern on a byte by byte basis, even for multi-byte
     // encodings.
     while input.len() > 0 && pattern.len() > 0 {
-        if pattern.next_raw_byte() == b'\\' {
+        if HAS_ESCAPE && pattern.next_raw_byte() == b'\\' {
             // Next pattern byte must match literally, whatever it is
             pattern.advance_byte();
             // ... and there had better be one, per SQL standard
@@ -229,7 +235,7 @@ fn like<T: Traverser + Clone>(
             // more than we have to.  This fact also guarantees that we don't
             // have to consider a match to the zero-length substring at the
             // end of the text.
-            let first_pat = if pattern.next_raw_byte() == b'\\' {
+            let first_pat = if HAS_ESCAPE && pattern.next_raw_byte() == b'\\' {
                 if pattern.len() < 2 {
                     return Err(InvalidPatternError);
                 }
@@ -242,7 +248,7 @@ fn like<T: Traverser + Clone>(
                 if input.next_byte() == first_pat {
                     let mut i = input.clone();
                     let mut p = pattern.clone();
-                    let matched = like(&mut i, &mut p)?;
+                    let matched = like::<T, HAS_ESCAPE>(&mut i, &mut p)?;
                     if matched != Matched::False {
                         return Ok(matched); // True or Abort
                     }
@@ -513,50 +519,50 @@ impl<'a> Traverser for CiBytesTraverser<'a> {
     }
 }
 
-impl Like for str {
+impl<const HAS_ESCAPE: bool> Like<HAS_ESCAPE> for str {
     type Err = InvalidPatternError;
 
     #[inline]
     fn like(&self, pattern: &Self) -> Result<bool, Self::Err> {
         let mut input = StrTraverser::new(self);
         let mut pattern = StrTraverser::new(pattern);
-        let result = like(&mut input, &mut pattern)?;
+        let result = like::<_, HAS_ESCAPE>(&mut input, &mut pattern)?;
         Ok(matches!(result, Matched::True))
     }
 }
 
-impl Like for [u8] {
+impl<const HAS_ESCAPE: bool> Like<HAS_ESCAPE> for [u8] {
     type Err = InvalidPatternError;
 
     #[inline]
     fn like(&self, pattern: &Self) -> Result<bool, Self::Err> {
         let mut input = BytesTraverser::new(self);
         let mut pattern = BytesTraverser::new(pattern);
-        let result = like(&mut input, &mut pattern)?;
+        let result = like::<_, HAS_ESCAPE>(&mut input, &mut pattern)?;
         Ok(matches!(result, Matched::True))
     }
 }
 
-impl ILike for str {
+impl<const HAS_ESCAPE: bool> ILike<HAS_ESCAPE> for str {
     type Err = InvalidPatternError;
 
     #[inline]
     fn ilike(&self, pattern: &Self) -> Result<bool, Self::Err> {
         let mut input = CiStrTraverser::new(self);
         let mut pattern = CiStrTraverser::new(pattern);
-        let result = like(&mut input, &mut pattern)?;
+        let result = like::<_, HAS_ESCAPE>(&mut input, &mut pattern)?;
         Ok(matches!(result, Matched::True))
     }
 }
 
-impl ILike for [u8] {
+impl<const HAS_ESCAPE: bool> ILike<HAS_ESCAPE> for [u8] {
     type Err = InvalidPatternError;
 
     #[inline]
     fn ilike(&self, pattern: &Self) -> Result<bool, Self::Err> {
         let mut input = CiBytesTraverser::new(self);
         let mut pattern = CiBytesTraverser::new(pattern);
-        let result = like(&mut input, &mut pattern)?;
+        let result = like::<_, HAS_ESCAPE>(&mut input, &mut pattern)?;
         Ok(matches!(result, Matched::True))
     }
 }
@@ -625,11 +631,6 @@ where
         esc.advance_char();
         if esc.len() != 0 {
             return Err(InvalidEscapeError::MultiChars);
-        }
-
-        // If specified escape is '\', just copy the pattern as-is.
-        if e == '\\' {
-            return Ok(pat.to_owned());
         }
 
         // Otherwise, convert occurrences of the specified escape character to
@@ -731,23 +732,25 @@ mod tests {
     use super::*;
     use std::fmt::Debug;
 
-    fn like_test<T: Like + ?Sized>(input: &T, pattern: &T, result: bool)
+    fn like_test<T, const HAS_ESCAPE: bool>(input: &T, pattern: &T, result: bool)
     where
+        T: Like<HAS_ESCAPE> + ?Sized,
         T::Err: Debug,
     {
         assert_eq!(input.like(pattern).unwrap(), result);
         assert_eq!(input.not_like(pattern).unwrap(), !result);
     }
 
-    fn ilike_test<T: ILike + ?Sized>(input: &T, pattern: &T, result: bool)
+    fn ilike_test<T, const HAS_ESCAPE: bool>(input: &T, pattern: &T, result: bool)
     where
+        T: ILike<HAS_ESCAPE> + ?Sized,
         T::Err: Debug,
     {
         assert_eq!(input.ilike(pattern).unwrap(), result);
         assert_eq!(input.not_ilike(pattern).unwrap(), !result);
     }
 
-    fn pattern_error_test<T: Like + ILike + ?Sized>(input: &T, error_pattern: &T) {
+    fn pattern_error_test<T: Like<true> + ILike<true> + ?Sized>(input: &T, error_pattern: &T) {
         assert!(input.like(error_pattern).is_err());
         assert!(input.not_like(error_pattern).is_err());
         assert!(input.ilike(error_pattern).is_err());
@@ -768,56 +771,59 @@ mod tests {
     fn test_percent_sign() {
         // a percent sign (%) matches any sequence of zero or more characters
         let str = "Hello,世界!";
-        like_test(str, "%", true);
-        like_test(str, "%%%%%%%%%", true);
-        like_test(str, "%%%%%%%%%%", true);
-        ilike_test(str, "%", true);
-        ilike_test(str, "%%%%%%%%%", true);
-        ilike_test(str, "%%%%%%%%%%", true);
+        like_test::<_, false>(str, "%", true);
+        like_test::<_, false>(str, "%%%%%%%%%", true);
+        like_test::<_, false>(str, "%%%%%%%%%%", true);
+        ilike_test::<_, false>(str, "%", true);
+        ilike_test::<_, false>(str, "%%%%%%%%%", true);
+        ilike_test::<_, false>(str, "%%%%%%%%%%", true);
 
         let bytes = &b"Hello!"[..];
-        like_test(bytes, b"%", true);
-        like_test(bytes, b"%%%%%%", true);
-        like_test(bytes, b"%%%%%%%", true);
-        ilike_test(bytes, b"%", true);
-        ilike_test(bytes, b"%%%%%%", true);
-        ilike_test(bytes, b"%%%%%%%", true);
+        like_test::<_, false>(bytes, b"%", true);
+        like_test::<_, false>(bytes, b"%%%%%%", true);
+        like_test::<_, false>(bytes, b"%%%%%%%", true);
+        ilike_test::<_, false>(bytes, b"%", true);
+        ilike_test::<_, false>(bytes, b"%%%%%%", true);
+        ilike_test::<_, false>(bytes, b"%%%%%%%", true);
 
         let str2: &str = "601618";
         let bytes2: &[u8] = b"601618";
-        like_test(str2, "%618", true);
-        ilike_test(str2, "%618", true);
-        like_test(bytes2, b"%618", true);
-        ilike_test(bytes2, b"%618", true);
+        like_test::<_, false>(str2, "%618", true);
+        ilike_test::<_, false>(str2, "%618", true);
+        like_test::<_, false>(bytes2, b"%618", true);
+        ilike_test::<_, false>(bytes2, b"%618", true);
 
         // Test Utf8
         let str3 = "中文测试";
-        like_test(str3, "%测试", true);
-        ilike_test(str3, "%测试", true);
+        like_test::<_, false>(str3, "%测试", true);
+        like_test::<_, false>(str3, "中文测试%%", true);
+        ilike_test::<_, false>(str3, "%测试", true);
+        like_test::<_, false>("中文测试%\\", "中文测试%\\", true);
+        ilike_test::<_, false>("中文测试%\\", "中文测试%\\", true);
     }
 
     #[test]
     fn test_underscore() {
         // An underscore (_) in pattern stands for (matches) any single character
         let str: &str = "Hello,世界!";
-        like_test(str, "_", false);
-        like_test(str, "________", false);
-        like_test(str, "_________", true);
-        like_test(str, "__________", false);
-        ilike_test(str, "_", false);
-        ilike_test(str, "________", false);
-        ilike_test(str, "_________", true);
-        ilike_test(str, "__________", false);
+        like_test::<_, false>(str, "_", false);
+        like_test::<_, false>(str, "________", false);
+        like_test::<_, false>(str, "_________", true);
+        like_test::<_, false>(str, "__________", false);
+        ilike_test::<_, false>(str, "_", false);
+        ilike_test::<_, false>(str, "________", false);
+        ilike_test::<_, false>(str, "_________", true);
+        ilike_test::<_, false>(str, "__________", false);
 
         let bytes: &[u8] = b"Hello!";
-        like_test(bytes, b"_", false);
-        like_test(bytes, b"_____", false);
-        like_test(bytes, b"______", true);
-        like_test(bytes, b"_______", false);
-        ilike_test(bytes, b"_", false);
-        ilike_test(bytes, b"_____", false);
-        ilike_test(bytes, b"______", true);
-        ilike_test(bytes, b"_______", false);
+        like_test::<_, false>(bytes, b"_", false);
+        like_test::<_, false>(bytes, b"_____", false);
+        like_test::<_, false>(bytes, b"______", true);
+        like_test::<_, false>(bytes, b"_______", false);
+        ilike_test::<_, false>(bytes, b"_", false);
+        ilike_test::<_, false>(bytes, b"_____", false);
+        ilike_test::<_, false>(bytes, b"______", true);
+        ilike_test::<_, false>(bytes, b"_______", false);
     }
 
     #[test]
@@ -826,20 +832,20 @@ mod tests {
         // then the pattern only represents the string itself.
         let str_lower: &str = "hello,世界!";
         let str_upper: &str = "Hello,世界!";
-        like_test(str_upper, "Hello", false);
-        like_test(str_upper, "Hello,!", false);
-        like_test(str_upper, "Hello,世界!", true);
-        like_test(str_upper, "hello,世界!", false);
-        ilike_test(str_upper, "hello,世界!", true);
-        ilike_test(str_lower, "Hello,世界!", true);
+        like_test::<_, false>(str_upper, "Hello", false);
+        like_test::<_, false>(str_upper, "Hello,!", false);
+        like_test::<_, false>(str_upper, "Hello,世界!", true);
+        like_test::<_, false>(str_upper, "hello,世界!", false);
+        ilike_test::<_, false>(str_upper, "hello,世界!", true);
+        ilike_test::<_, false>(str_lower, "Hello,世界!", true);
 
         let bytes_lower: &[u8] = b"hello!";
         let bytes_upper: &[u8] = b"Hello!";
-        like_test(bytes_upper, b"Hello", false);
-        like_test(bytes_upper, b"Hello!", true);
-        like_test(bytes_upper, b"hello!", false);
-        ilike_test(bytes_upper, b"hello!", true);
-        ilike_test(bytes_lower, b"Hello!", true);
+        like_test::<_, false>(bytes_upper, b"Hello", false);
+        like_test::<_, false>(bytes_upper, b"Hello!", true);
+        like_test::<_, false>(bytes_upper, b"hello!", false);
+        ilike_test::<_, false>(bytes_upper, b"hello!", true);
+        ilike_test::<_, false>(bytes_lower, b"Hello!", true);
     }
 
     #[test]
@@ -847,32 +853,55 @@ mod tests {
         // Mix the string, percent sign(%) and underscores(_) in the input,
         // and make sure the combination works
         let str: &str = "Abc";
-        like_test(str, "A%_", true);
-        like_test(str, "A_%", true);
-        like_test(str, "%b_", true);
-        like_test(str, "%_c", true);
-        like_test(str, "_b%", true);
-        like_test(str, "_%c", true);
-        ilike_test(str, "a%_", true);
-        ilike_test(str, "a_%", true);
-        ilike_test(str, "%B_", true);
-        ilike_test(str, "%_C", true);
-        ilike_test(str, "_B%", true);
-        ilike_test(str, "_%C", true);
+        like_test::<_, false>(str, "A%_", true);
+        like_test::<_, false>(str, "A_%", true);
+        like_test::<_, false>(str, "%b_", true);
+        like_test::<_, false>(str, "%_c", true);
+        like_test::<_, false>(str, "_b%", true);
+        like_test::<_, false>(str, "_%c", true);
+        ilike_test::<_, false>(str, "a%_", true);
+        ilike_test::<_, false>(str, "a_%", true);
+        ilike_test::<_, false>(str, "%B_", true);
+        ilike_test::<_, false>(str, "%_C", true);
+        ilike_test::<_, false>(str, "_B%", true);
+        ilike_test::<_, false>(str, "_%C", true);
 
         let bytes: &[u8] = b"Abc";
-        like_test(bytes, b"A%_", true);
-        like_test(bytes, b"A_%", true);
-        like_test(bytes, b"%b_", true);
-        like_test(bytes, b"%_c", true);
-        like_test(bytes, b"_b%", true);
-        like_test(bytes, b"_%c", true);
-        ilike_test(bytes, b"a%_", true);
-        ilike_test(bytes, b"a_%", true);
-        ilike_test(bytes, b"%B_", true);
-        ilike_test(bytes, b"%_C", true);
-        ilike_test(bytes, b"_B%", true);
-        ilike_test(bytes, b"_%C", true);
+        like_test::<_, false>(bytes, b"A%_", true);
+        like_test::<_, false>(bytes, b"A_%", true);
+        like_test::<_, false>(bytes, b"%b_", true);
+        like_test::<_, false>(bytes, b"%_c", true);
+        like_test::<_, false>(bytes, b"_b%", true);
+        like_test::<_, false>(bytes, b"_%c", true);
+        ilike_test::<_, false>(bytes, b"a%_", true);
+        ilike_test::<_, false>(bytes, b"a_%", true);
+        ilike_test::<_, false>(bytes, b"%B_", true);
+        ilike_test::<_, false>(bytes, b"%_C", true);
+        ilike_test::<_, false>(bytes, b"_B%", true);
+        ilike_test::<_, false>(bytes, b"_%C", true);
+    }
+
+    #[test]
+    fn test_like_escape() {
+        let escape = ",";
+        let pattern = "Hello,,世界!".escape(escape).unwrap();
+        like_test::<_, true>("Hello,世界!", pattern.as_str(), true);
+        ilike_test::<_, true>("hello,世界!", pattern.as_str(), true);
+
+        // No escape in pattern
+        let escape = "?";
+        let pattern = "Hello\\世界!".escape(escape).unwrap();
+        like_test::<_, true>("Hello\\世界!", pattern.as_str(), true);
+        ilike_test::<_, true>("hello\\世界!", pattern.as_str(), true);
+
+        let pattern = "Hello,世界!\\".escape(escape).unwrap();
+        like_test::<_, true>("Hello,世界!\\", pattern.as_str(), true);
+        ilike_test::<_, true>("hello,世界!\\", pattern.as_str(), true);
+
+        let escape = "\\";
+        let pattern = "Hello,世界!".escape(escape).unwrap();
+        like_test::<_, true>("Hello,世界!", pattern.as_str(), true);
+        ilike_test::<_, true>("hello,世界!", pattern.as_str(), true);
     }
 
     fn escape_test<T: Escape + ?Sized, R: Into<T::Output>>(input: &T, escape: &T, result: R)
@@ -893,6 +922,8 @@ mod tests {
         // if Escape string is more than one character will return error.
         escape_error_test("Hello,世界!", ",!");
         escape_error_test("Hello,世界!", "!");
+        escape_error_test("Hello,世界\\", "\\");
+        escape_error_test("Hello,世界\\1", "\\");
         escape_error_test("Hello,世界", "界");
         escape_error_test(&b"Hello,World!"[..], b",!");
     }
