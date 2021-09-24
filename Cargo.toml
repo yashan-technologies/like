@@ -1,6 +1,6 @@
 [package]
 name = "like"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["David Li <davidli2010@foxmail.com>"]
 edition = "2018"
 readme = "README.md"
