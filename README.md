@@ -13,7 +13,10 @@ To do a patten matching, use `Like`:
 ```Rust
 use like::Like;
 
-assert!("Hello, world!".like("Hello%").unwrap());
+// Has Escape
+assert!(Like::<true>::like("Hello, world!", "Hello%").unwrap());
+// No Escape
+assert!(Like::<false>::like("Hello, world!", "Hello%").unwrap());
 ```
 
 To do a case-insensitive pattern matching, use `ILike`:
@@ -21,7 +24,10 @@ To do a case-insensitive pattern matching, use `ILike`:
 ```Rust
 use like::ILike;
 
-assert!("Hello, world!".ilike("HELLO%").unwrap());
+// Has Escape
+assert!(ILike::<true>::ilike("Hello, world!", "HELLO%").unwrap());
+// No Escape
+assert!(ILike::<false>::ilike("Hello, world!", "HELLO%").unwrap());
 ```
 
 To convert the pattern to use standard backslash escape convention, use `Escape`:
