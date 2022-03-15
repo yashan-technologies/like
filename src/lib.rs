@@ -43,6 +43,7 @@
 //! assert_eq!("Hello$%".escape("$").unwrap(), "Hello\\%");
 //! ```
 
+use std::collections::TryReserveError;
 use std::error::Error;
 use std::fmt::{self, Display};
 
@@ -350,17 +351,6 @@ impl<'a> Bytes<'a> {
         let str = unsafe { std::str::from_utf8_unchecked(self.bytes) };
         str.chars().next().unwrap()
     }
-
-    #[inline]
-    fn to_str(&self) -> String {
-        let str = unsafe { std::str::from_utf8_unchecked(self.bytes) };
-        str.to_string()
-    }
-
-    #[inline]
-    fn to_vec(&self) -> Vec<u8> {
-        self.bytes.into()
-    }
 }
 
 #[derive(Clone)]
@@ -567,24 +557,27 @@ impl<const HAS_ESCAPE: bool> ILike<HAS_ESCAPE> for [u8] {
     }
 }
 
-trait Owned {
-    fn new(size: usize) -> Self;
+trait Owned: Sized {
+    fn try_new(size: usize) -> Result<Self, TryReserveError>;
     fn append(&mut self, ch: char);
 }
 
-trait ToOwned {
-    type Owned: Owned;
-
-    fn to_owned(&self) -> Self::Owned;
-}
-
 /// Errors which can occur when attempting to convert escape.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InvalidEscapeError {
     /// Multiple Escape characters error.
     MultiChars,
     /// Error character following Escape.
     InvalidEscape,
+    /// Error for `try_reserve` methods.
+    TryReserveError(TryReserveError),
+}
+
+impl From<TryReserveError> for InvalidEscapeError {
+    #[inline]
+    fn from(e: TryReserveError) -> Self {
+        InvalidEscapeError::TryReserveError(e)
+    }
 }
 
 impl Display for InvalidEscapeError {
@@ -600,6 +593,9 @@ impl Display for InvalidEscapeError {
                     "missing or illegal character following the escape character"
                 )
             }
+            InvalidEscapeError::TryReserveError(e) => {
+                write!(f, "{}", e)
+            }
         }
     }
 }
@@ -608,12 +604,12 @@ impl Error for InvalidEscapeError {}
 
 fn escape<T, R>(pat: &mut T, esc: &mut T) -> Result<R, InvalidEscapeError>
 where
-    T: Traverser + ToOwned<Owned = R>,
+    T: Traverser,
     R: Owned,
 {
     // Worst-case pattern growth is 2x --- unlikely, but it's hardly worth
     // trying to calculate the size more accurately than that.
-    let mut result = R::new(pat.len() * 2);
+    let mut result = R::try_new(pat.len() * 2)?;
 
     if esc.len() == 0 {
         // No escape character is wanted.  Double any backslashes in the
@@ -668,38 +664,30 @@ where
 }
 
 impl Owned for String {
-    fn new(size: usize) -> String {
-        String::with_capacity(size)
+    #[inline]
+    fn try_new(size: usize) -> Result<Self, TryReserveError> {
+        let mut s = String::new();
+        s.try_reserve(size)?;
+        Ok(s)
     }
 
+    #[inline]
     fn append(&mut self, ch: char) {
-        self.push(ch)
+        self.push(ch);
     }
 }
 
 impl Owned for Vec<u8> {
-    fn new(size: usize) -> Vec<u8> {
-        Vec::with_capacity(size)
+    #[inline]
+    fn try_new(size: usize) -> Result<Self, TryReserveError> {
+        let mut s = Vec::new();
+        s.try_reserve(size)?;
+        Ok(s)
     }
 
+    #[inline]
     fn append(&mut self, ch: char) {
-        self.push(ch as u8)
-    }
-}
-
-impl<'a> ToOwned for StrTraverser<'a> {
-    type Owned = String;
-
-    fn to_owned(&self) -> Self::Owned {
-        self.bytes.to_str()
-    }
-}
-
-impl<'a> ToOwned for BytesTraverser<'a> {
-    type Owned = Vec<u8>;
-
-    fn to_owned(&self) -> Self::Owned {
-        self.bytes.to_vec()
+        self.push(ch as u8);
     }
 }
 
