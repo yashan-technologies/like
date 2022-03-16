@@ -38,6 +38,10 @@ use like::Escape;
 assert_eq!("Hello$%".escape("$").unwrap(), "Hello\\%");
 ```
 
+## Rust Version
+
+This version of `like` requires Rust 1.57 or later.
+
 ## License
 
 This project is licensed under the Apache-2.0 license ([LICENSE](LICENSE) or http://www.apache.org/licenses/LICENSE-2.0).
